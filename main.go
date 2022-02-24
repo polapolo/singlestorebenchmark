@@ -7,17 +7,16 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
-
-	"github.com/polapolo/singlestorebenchmark/pkg"
 )
 
-const numOfUserIDs = 100000 // number of users
-const numOfOrders = 10      // order matched per user
-const numOfTrades = 1       // trade matched per order
+// const numOfUserIDs = 100000 // number of users
+// const numOfOrders = 10      // order matched per user
+// const numOfTrades = 1       // trade matched per order
 
-const numOfPoolMaxConnection = 10
-const numOfWorkers = 10
+// const numOfPoolMaxConnection = 10
+// const numOfWorkers = 10
 
 // https://www.timescale.com/blog/13-tips-to-improve-postgresql-insert-performance/
 func main() {
@@ -25,15 +24,35 @@ func main() {
 
 	ctx := context.Background()
 
-	db := connectDB(ctx)
-	defer db.Close()
+	r := gin.Default()
 
-	refreshSchema(ctx, db)
-	poolInsertOrders(ctx, db)
+	r.GET("/benchmark", func(c *gin.Context) {
+		numOfPoolMaxConnectionString := c.DefaultQuery("numOfPoolMaxConnection", "10")
+		numOfPoolMaxConnection, _ := strconv.Atoi(numOfPoolMaxConnectionString)
+
+		db := connectDB(ctx, numOfPoolMaxConnection)
+		defer db.Close()
+
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+
+		refreshSchema(ctx, db)
+
+		result := poolInsertOrders(ctx, db, numOfUserIDs, numOfOrders)
+
+		c.JSON(200, result)
+	})
+
+	r.Run(":8090")
+
+	// refreshSchema(ctx, db)
+	// poolInsertOrders(ctx, db)
 	// concurrentInsertOrders(ctx, db)
 }
 
-func connectDB(ctx context.Context) *sql.DB {
+func connectDB(ctx context.Context, numOfPoolMaxConnection int) *sql.DB {
 	HOSTNAME := ""
 	PORT := ""
 	USERNAME := ""
@@ -105,7 +124,7 @@ func refreshSchema(ctx context.Context, db *sql.DB) {
 	}
 }
 
-func generateInsertOrderQueries() []string {
+func generateInsertOrderQueries(numOfUserIDs int, numOfOrders int) []string {
 	queries := make([]string, 0)
 	// users
 	for i := 1; i <= numOfUserIDs; i++ {
@@ -131,8 +150,14 @@ type result struct {
 	SpeedInMs int64
 }
 
-func poolInsertOrders(ctx context.Context, db *sql.DB) {
-	queries := generateInsertOrderQueries()
+type summary struct {
+	TotalTimeInMs         int64
+	AvgSpeedInMicroSecond int64
+	RecordPerSecond       float64
+}
+
+func poolInsertOrders(ctx context.Context, db *sql.DB, numOfUserIDs int, numOfOrders int) summary {
+	queries := generateInsertOrderQueries(numOfUserIDs, numOfOrders)
 
 	startTime := time.Now()
 
@@ -144,7 +169,7 @@ func poolInsertOrders(ctx context.Context, db *sql.DB) {
 		go func(workerID int, query string) {
 			_, err := db.ExecContext(ctx, query)
 			if err != nil {
-				log.Fatalln(query, err)
+				log.Println(query, err)
 			}
 
 			resultC <- result{
@@ -163,41 +188,47 @@ func poolInsertOrders(ctx context.Context, db *sql.DB) {
 	log.Println("Total Time:", timeElapsed.Milliseconds(), "ms")
 	log.Println("Avg speed:", timeElapsed.Microseconds()/int64(totalTask), "microsecond")
 	log.Println("Record/s:", float64(totalTask)/timeElapsed.Seconds())
+
+	return summary{
+		TotalTimeInMs:         timeElapsed.Milliseconds(),
+		AvgSpeedInMicroSecond: timeElapsed.Microseconds() / int64(totalTask),
+		RecordPerSecond:       float64(totalTask) / timeElapsed.Seconds(),
+	}
 }
 
-func concurrentInsertOrders(ctx context.Context, db *sql.DB) {
-	orderQueries := generateInsertOrderQueries()
+// func concurrentInsertOrders(ctx context.Context, db *sql.DB) {
+// 	orderQueries := generateInsertOrderQueries()
 
-	startTime := time.Now()
+// 	startTime := time.Now()
 
-	insertWorkerPool := pkg.NewWorkerPool(numOfWorkers)
-	insertWorkerPool.Run()
+// 	insertWorkerPool := pkg.NewWorkerPool(numOfWorkers)
+// 	insertWorkerPool.Run()
 
-	totalTask := len(orderQueries)
-	resultC := make(chan result, totalTask)
+// 	totalTask := len(orderQueries)
+// 	resultC := make(chan result, totalTask)
 
-	for i := 0; i < totalTask; i++ {
-		query := orderQueries[i]
+// 	for i := 0; i < totalTask; i++ {
+// 		query := orderQueries[i]
 
-		insertWorkerPool.AddTask(func() {
-			_, err := db.ExecContext(ctx, query)
-			if err != nil {
-				log.Fatalln(query, err)
-			}
+// 		insertWorkerPool.AddTask(func() {
+// 			_, err := db.ExecContext(ctx, query)
+// 			if err != nil {
+// 				log.Fatalln(query, err)
+// 			}
 
-			resultC <- result{
-				// WorkerID:  id,
-				// SpeedInMs: timeElapsed.Microseconds(),
-			}
-		})
-	}
+// 			resultC <- result{
+// 				// WorkerID:  id,
+// 				// SpeedInMs: timeElapsed.Microseconds(),
+// 			}
+// 		})
+// 	}
 
-	for i := 0; i < totalTask; i++ {
-		_ = <-resultC
-	}
+// 	for i := 0; i < totalTask; i++ {
+// 		_ = <-resultC
+// 	}
 
-	timeElapsed := time.Since(startTime)
-	log.Println("Total Time:", timeElapsed.Milliseconds(), "ms")
-	log.Println("Avg speed:", timeElapsed.Microseconds()/int64(totalTask), "microsecond")
-	log.Println("Record/s:", float64(totalTask)/timeElapsed.Seconds())
-}
+// 	timeElapsed := time.Since(startTime)
+// 	log.Println("Total Time:", timeElapsed.Milliseconds(), "ms")
+// 	log.Println("Avg speed:", timeElapsed.Microseconds()/int64(totalTask), "microsecond")
+// 	log.Println("Record/s:", float64(totalTask)/timeElapsed.Seconds())
+// }
