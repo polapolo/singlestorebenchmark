@@ -17,7 +17,7 @@ const numOfOrders = 10      // order matched per user
 const numOfTrades = 1       // trade matched per order
 
 const numOfPoolMaxConnection = 10
-const numOfWorkers = 100
+const numOfWorkers = 10
 
 // https://www.timescale.com/blog/13-tips-to-improve-postgresql-insert-performance/
 func main() {
@@ -29,16 +29,16 @@ func main() {
 	defer db.Close()
 
 	refreshSchema(ctx, db)
-	// poolInsertOrders(ctx, db)
-	concurrentInsertOrders(ctx, db)
+	poolInsertOrders(ctx, db)
+	// concurrentInsertOrders(ctx, db)
 }
 
 func connectDB(ctx context.Context) *sql.DB {
-	HOSTNAME := "127.0.0.1"
-	PORT := "3306"
-	USERNAME := "root"
-	PASSWORD := "XVop(,borFA;]C[COW+b"
-	DATABASE := "benchmark"
+	HOSTNAME := ""
+	PORT := ""
+	USERNAME := ""
+	PASSWORD := ""
+	DATABASE := ""
 
 	connection := USERNAME + ":" + PASSWORD + "@tcp(" + HOSTNAME + ":" + PORT + ")/" + DATABASE + "?parseTime=true"
 	db, err := sql.Open("mysql", connection)
