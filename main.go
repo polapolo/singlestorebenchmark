@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // https://www.timescale.com/blog/13-tips-to-improve-postgresql-insert-performance/
@@ -85,6 +87,17 @@ func main() {
 		resultB := poolInsertTrades(ctx, db, numOfUserIDs, numOfOrders, numOfTrades)
 
 		c.JSON(200, []interface{}{resultA, resultB})
+	})
+
+	r.GET("/publish", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+
+		publishInsertOrderJSON(numOfUserIDs, numOfOrders)
+
+		c.JSON(200, []interface{}{"DONE"})
 	})
 
 	r.Run(":8090")
@@ -207,6 +220,99 @@ func generateInsertTradeQueries(numOfUserIDs int, numOfOrders int, numOfTrades i
 	}
 
 	return queries
+}
+
+type order struct {
+	UserID    int64  `json:"user_id"`
+	StockCode string `json:"stock_code"`
+	Type      string `json:"type"`
+	Lot       int64  `json:"lot"`
+	Price     int    `json:"price"`
+	Status    int    `json:"status"`
+}
+
+func generateInsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
+	orderJSONs := make([][]byte, 0)
+	// users
+	for i := 1; i <= numOfUserIDs; i++ {
+		// orders
+		for j := 1; j <= numOfOrders; j++ {
+			orderType := "B"
+			if j%2 == 0 {
+				orderType = "S"
+			}
+
+			orderJSON, err := json.Marshal(order{
+				UserID:    int64(i),
+				StockCode: "BBCA",
+				Type:      orderType,
+				Lot:       10,
+				Price:     1000,
+				Status:    1,
+			})
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+
+			orderJSONs = append(orderJSONs, orderJSON)
+		}
+	}
+
+	return orderJSONs
+}
+
+func getRedPandaHosts() []string {
+	return []string{
+		"0.0.0.0:9092",
+	}
+}
+
+func getRedPandaClient() *kgo.Client {
+	redPandaClient, err := kgo.NewClient(
+		kgo.SeedBrokers(getRedPandaHosts()...),
+	)
+	if err != nil {
+		log.Println(err)
+		panic(err)
+	}
+
+	return redPandaClient
+}
+
+func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
+	redPandaClient := getRedPandaClient()
+	defer redPandaClient.Close()
+
+	jsons := generateInsertOrderJSON(numOfUserIDs, numOfOrders)
+
+	// var wg sync.WaitGroup
+	// wg.Add(len(jsons))
+
+	// for _, myJSON := range jsons {
+	// 	myRecord := &kgo.Record{Topic: "orders", Value: myJSON}
+
+	// 	redPandaClient.Produce(context.Background(), myRecord, func(_ *kgo.Record, err error) {
+	// 		defer wg.Done()
+	// 		if err != nil {
+	// 			fmt.Printf("record had a produce error: %v\n", err)
+	// 		}
+
+	// 	})
+	// }
+	// wg.Wait()
+
+	records := make([]*kgo.Record, 0)
+	for _, myJSON := range jsons {
+		records = append(records, &kgo.Record{Topic: "orders", Value: myJSON})
+	}
+
+	log.Println("start")
+	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
+	if err != nil {
+		log.Println(err)
+	}
+	log.Println("finish")
 }
 
 type result struct {
