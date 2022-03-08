@@ -264,7 +264,7 @@ func generateInsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
 
 func getRedPandaHosts() []string {
 	return []string{
-		"0.0.0.0:9092",
+		"127.0.0.1:9093",
 	}
 }
 
