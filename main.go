@@ -100,6 +100,17 @@ func main() {
 		c.JSON(200, []interface{}{"DONE"})
 	})
 
+	r.GET("/publish/orders/upsert", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+
+		publishUpsertOrderJSON(numOfUserIDs, numOfOrders)
+
+		c.JSON(200, []interface{}{"DONE"})
+	})
+
 	r.GET("/publish/trades", func(c *gin.Context) {
 		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
 		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
@@ -236,6 +247,7 @@ func generateInsertTradeQueries(numOfUserIDs int, numOfOrders int, numOfTrades i
 }
 
 type order struct {
+	ID        int64  `json:"id,omitempty"`
 	UserID    int64  `json:"user_id"`
 	StockCode string `json:"stock_code"`
 	Type      string `json:"type"`
@@ -256,6 +268,40 @@ func generateInsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
 			}
 
 			orderJSON, err := json.Marshal(order{
+				UserID:    int64(i),
+				StockCode: "BBCA",
+				Type:      orderType,
+				Lot:       10,
+				Price:     1000,
+				Status:    1,
+			})
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+
+			orderJSONs = append(orderJSONs, orderJSON)
+		}
+	}
+
+	return orderJSONs
+}
+
+func generateUpsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
+	orderJSONs := make([][]byte, 0)
+	// users
+	for i := 1; i <= numOfUserIDs; i++ {
+		// orders
+		for j := 1; j <= numOfOrders; j++ {
+			orderType := "B"
+			if j%2 == 0 {
+				orderType = "S"
+			}
+
+			offset := numOfOrders * (i - 1)
+
+			orderJSON, err := json.Marshal(order{
+				ID:        int64(j + offset),
 				UserID:    int64(i),
 				StockCode: "BBCA",
 				Type:      orderType,
@@ -360,12 +406,10 @@ func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 		records = append(records, &kgo.Record{Topic: "orders", Value: myJSON})
 	}
 
-	log.Println("start")
 	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
 	if err != nil {
 		log.Println(err)
 	}
-	log.Println("finish")
 }
 
 func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) {
@@ -377,6 +421,23 @@ func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) 
 	records := make([]*kgo.Record, 0)
 	for _, myJSON := range jsons {
 		records = append(records, &kgo.Record{Topic: "trades", Value: myJSON})
+	}
+
+	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func publishUpsertOrderJSON(numOfUserIDs int, numOfOrders int) {
+	redPandaClient := getRedPandaClient()
+	defer redPandaClient.Close()
+
+	jsons := generateUpsertOrderJSON(numOfUserIDs, numOfOrders)
+
+	records := make([]*kgo.Record, 0)
+	for _, myJSON := range jsons {
+		records = append(records, &kgo.Record{Topic: "orders_upsert", Value: myJSON})
 	}
 
 	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
