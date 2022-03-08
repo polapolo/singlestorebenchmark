@@ -89,13 +89,26 @@ func main() {
 		c.JSON(200, []interface{}{resultA, resultB})
 	})
 
-	r.GET("/publish", func(c *gin.Context) {
+	r.GET("/publish/orders", func(c *gin.Context) {
 		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
 		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
 		publishInsertOrderJSON(numOfUserIDs, numOfOrders)
+
+		c.JSON(200, []interface{}{"DONE"})
+	})
+
+	r.GET("/publish/trades", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+		numOfTradesString := c.DefaultQuery("numOfTrades", "1")
+		numOfTrades, _ := strconv.Atoi(numOfTradesString)
+
+		publishInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
@@ -262,6 +275,46 @@ func generateInsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
 	return orderJSONs
 }
 
+type trade struct {
+	OrderID       int64  `json:"order_id"`
+	Lot           int64  `json:"lot"`
+	LotMultiplier int    `json:"lot_multiplier"`
+	Price         int    `json:"price"`
+	Total         int64  `json:"total"`
+	CreatedAt     string `json:"created_at"`
+}
+
+func generateInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) [][]byte {
+	tradeJSONs := make([][]byte, 0)
+	// users
+	for i := 1; i <= numOfUserIDs; i++ {
+		// orders
+		for j := 1; j <= numOfOrders; j++ {
+			offset := numOfOrders * (i - 1)
+
+			// trades
+			for k := 1; k <= numOfTrades; k++ {
+				tradeJSON, err := json.Marshal(trade{
+					OrderID:       int64(j + offset),
+					Lot:           10,
+					LotMultiplier: 100,
+					Price:         1000,
+					Total:         1000000,
+					CreatedAt:     time.Now().Format(time.RFC3339),
+				})
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+
+				tradeJSONs = append(tradeJSONs, tradeJSON)
+			}
+		}
+	}
+
+	return tradeJSONs
+}
+
 func getRedPandaHosts() []string {
 	return []string{
 		"127.0.0.1:9093",
@@ -313,6 +366,23 @@ func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 		log.Println(err)
 	}
 	log.Println("finish")
+}
+
+func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) {
+	redPandaClient := getRedPandaClient()
+	defer redPandaClient.Close()
+
+	jsons := generateInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
+
+	records := make([]*kgo.Record, 0)
+	for _, myJSON := range jsons {
+		records = append(records, &kgo.Record{Topic: "trades", Value: myJSON})
+	}
+
+	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 type result struct {
