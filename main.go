@@ -90,19 +90,18 @@ func main() {
 		c.JSON(200, []interface{}{resultA, resultB})
 	})
 
-	r.GET("/publish/orders", func(c *gin.Context) {
+	r.GET("/publish/orders/insert/json", func(c *gin.Context) {
 		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
 		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
 		publishInsertOrderJSON(numOfUserIDs, numOfOrders)
-		publishInsertOrderAVRO(numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
 
-	r.GET("/publish/orders/upsert", func(c *gin.Context) {
+	r.GET("/publish/orders/upsert/json", func(c *gin.Context) {
 		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
 		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
@@ -113,7 +112,7 @@ func main() {
 		c.JSON(200, []interface{}{"DONE"})
 	})
 
-	r.GET("/publish/trades", func(c *gin.Context) {
+	r.GET("/publish/trades/insert/json", func(c *gin.Context) {
 		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
 		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
@@ -122,6 +121,17 @@ func main() {
 		numOfTrades, _ := strconv.Atoi(numOfTradesString)
 
 		publishInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
+
+		c.JSON(200, []interface{}{"DONE"})
+	})
+
+	r.GET("/publish/orders/insert/avro", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+
+		publishInsertOrderAVRO(numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
