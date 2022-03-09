@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -134,6 +135,102 @@ func main() {
 		publishInsertOrderAVRO(numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
+	})
+
+	r.GET("/consume/orders/avro", func(c *gin.Context) {
+		redPandaClient := getRedPandaClient("orders_avro")
+		defer redPandaClient.Close()
+
+		var jsonString string
+
+	consumerLoop:
+		for {
+			fetches := redPandaClient.PollFetches(ctx)
+			iter := fetches.RecordIter()
+
+			for _, fetchErr := range fetches.Errors() {
+				fmt.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
+					fetchErr.Topic, fetchErr.Partition, fetchErr.Err)
+				break consumerLoop
+			}
+
+			schema := avro.MustParse(`{"type":"record","name":"order","fields":[{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+
+			for !iter.Done() {
+				record := iter.Next()
+
+				result := orderAVRO{}
+				err := avro.Unmarshal(schema, record.Value, &result)
+				if err != nil {
+					log.Println(err)
+				}
+				resultJSON, _ := json.Marshal(result)
+				jsonString = string(resultJSON)
+				break consumerLoop
+			}
+		}
+
+		c.JSON(200, []interface{}{jsonString})
+	})
+
+	r.GET("/publish/orders/upsert/avro", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+
+		publishUpsertOrderAVRO(numOfUserIDs, numOfOrders)
+
+		c.JSON(200, []interface{}{"DONE"})
+	})
+
+	r.GET("/publish/trades/insert/avro", func(c *gin.Context) {
+		numOfUserIDsString := c.DefaultQuery("numOfUserIDs", "1000")
+		numOfUserIDs, _ := strconv.Atoi(numOfUserIDsString)
+		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
+		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
+		numOfTradesString := c.DefaultQuery("numOfTrades", "1")
+		numOfTrades, _ := strconv.Atoi(numOfTradesString)
+
+		publishInsertTradeAVRO(numOfUserIDs, numOfOrders, numOfTrades)
+
+		c.JSON(200, []interface{}{"DONE"})
+	})
+
+	r.GET("/consume/trades/avro", func(c *gin.Context) {
+		redPandaClient := getRedPandaClient("trades_avro")
+		defer redPandaClient.Close()
+
+		var jsonString string
+
+	consumerLoop:
+		for {
+			fetches := redPandaClient.PollFetches(ctx)
+			iter := fetches.RecordIter()
+
+			for _, fetchErr := range fetches.Errors() {
+				fmt.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
+					fetchErr.Topic, fetchErr.Partition, fetchErr.Err)
+				break consumerLoop
+			}
+
+			schema := avro.MustParse(`{"type":"record","name":"trade","fields":[{"name":"order_id","type":"long"},{"name":"lot","type":"long"},{"name":"lot_multiplier","type":"int"},{"name":"price","type":"int"},{"name":"total","type":"long"},{"name":"created_at","type":"string"}]}`)
+
+			for !iter.Done() {
+				record := iter.Next()
+
+				result := tradeAVRO{}
+				err := avro.Unmarshal(schema, record.Value, &result)
+				if err != nil {
+					log.Println(err)
+				}
+				resultJSON, _ := json.Marshal(result)
+				jsonString = string(resultJSON)
+				break consumerLoop
+			}
+		}
+
+		c.JSON(200, []interface{}{jsonString})
 	})
 
 	r.Run(":8090")
@@ -333,6 +430,48 @@ func generateUpsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
 	return orderJSONs
 }
 
+func generateUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
+	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"id","type":"long"},{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	orderAVROs := make([][]byte, 0)
+	// users
+	for i := 1; i <= numOfUserIDs; i++ {
+		// orders
+		for j := 1; j <= numOfOrders; j++ {
+			orderType := "B"
+			if j%2 == 0 {
+				orderType = "S"
+			}
+
+			offset := numOfOrders * (i - 1)
+
+			orderAVRO, err := avro.Marshal(
+				schema,
+				orderAVROUpsert{
+					ID:        int64(j + offset),
+					UserID:    int64(i),
+					StockCode: "BBCA",
+					Type:      orderType,
+					Lot:       10,
+					Price:     1000,
+					Status:    1,
+				},
+			)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+
+			orderAVROs = append(orderAVROs, orderAVRO)
+		}
+	}
+
+	return orderAVROs
+}
+
 type trade struct {
 	OrderID       int64  `json:"order_id"`
 	Lot           int64  `json:"lot"`
@@ -373,19 +512,30 @@ func generateInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int)
 	return tradeJSONs
 }
 
+type orderAVRO struct {
+	UserID    int64  `avro:"user_id"`
+	StockCode string `avro:"stock_code"`
+	Type      string `avro:"type"`
+	Lot       int64  `avro:"lot"`
+	Price     int    `avro:"price"`
+	Status    int    `avro:"status"`
+}
+
+type orderAVROUpsert struct {
+	ID        int64  `avro:"id"`
+	UserID    int64  `avro:"user_id"`
+	StockCode string `avro:"stock_code"`
+	Type      string `avro:"type"`
+	Lot       int64  `avro:"lot"`
+	Price     int    `avro:"price"`
+	Status    int    `avro:"status"`
+}
+
 func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
-	schema := avro.MustParse(`{
-		"type": "record",
-		"name": "order",
-		"fields": [
-			{ "name": "user_id", "type": "long" },
-			{ "name": "stock_code", "type": "string" },
-			{ "name": "type", "type": "string" },
-			{ "name": "lot", "type": "long" },
-			{ "name": "price", "type": "int" },
-			{ "name": "status", "type": "int" }
-		]
-	}`)
+	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	orderAVROs := make([][]byte, 0)
 	// users
@@ -399,7 +549,7 @@ func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
 
 			orderAVRO, err := avro.Marshal(
 				schema,
-				order{
+				orderAVRO{
 					UserID:    int64(i),
 					StockCode: "BBCA",
 					Type:      orderType,
@@ -420,15 +570,64 @@ func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
 	return orderAVROs
 }
 
+type tradeAVRO struct {
+	OrderID       int64  `avro:"order_id"`
+	Lot           int64  `avro:"lot"`
+	LotMultiplier int    `avro:"lot_multiplier"`
+	Price         int    `avro:"price"`
+	Total         int64  `avro:"total"`
+	CreatedAt     string `avro:"created_at"`
+}
+
+func generateInsertTradeAVRO(numOfUserIDs int, numOfOrders int, numOfTrades int) [][]byte {
+	schema, err := avro.Parse(`{"type":"record","name":"trade","fields":[{"name":"order_id","type":"long"},{"name":"lot","type":"long"},{"name":"lot_multiplier","type":"int"},{"name":"price","type":"int"},{"name":"total","type":"long"},{"name":"created_at","type":"string"}]}`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tradeAVROs := make([][]byte, 0)
+	// users
+	for i := 1; i <= numOfUserIDs; i++ {
+		// orders
+		for j := 1; j <= numOfOrders; j++ {
+			offset := numOfOrders * (i - 1)
+
+			// trades
+			for k := 1; k <= numOfTrades; k++ {
+				tradeAVRO, err := avro.Marshal(
+					schema,
+					tradeAVRO{
+						OrderID:       int64(j + offset),
+						Lot:           10,
+						LotMultiplier: 100,
+						Price:         1000,
+						Total:         1000000,
+						CreatedAt:     time.Now().Format(time.RFC3339),
+					},
+				)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+
+				tradeAVROs = append(tradeAVROs, tradeAVRO)
+			}
+		}
+	}
+
+	return tradeAVROs
+}
+
 func getRedPandaHosts() []string {
 	return []string{
 		"127.0.0.1:9093",
 	}
 }
 
-func getRedPandaClient() *kgo.Client {
+func getRedPandaClient(topicName string) *kgo.Client {
 	redPandaClient, err := kgo.NewClient(
 		kgo.SeedBrokers(getRedPandaHosts()...),
+		kgo.ConsumeTopics(topicName),
 	)
 	if err != nil {
 		log.Println(err)
@@ -439,7 +638,7 @@ func getRedPandaClient() *kgo.Client {
 }
 
 func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient()
+	redPandaClient := getRedPandaClient("orders")
 	defer redPandaClient.Close()
 
 	jsons := generateInsertOrderJSON(numOfUserIDs, numOfOrders)
@@ -472,7 +671,7 @@ func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 }
 
 func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) {
-	redPandaClient := getRedPandaClient()
+	redPandaClient := getRedPandaClient("trades")
 	defer redPandaClient.Close()
 
 	jsons := generateInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
@@ -489,7 +688,7 @@ func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) 
 }
 
 func publishUpsertOrderJSON(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient()
+	redPandaClient := getRedPandaClient("orders_upsert")
 	defer redPandaClient.Close()
 
 	jsons := generateUpsertOrderJSON(numOfUserIDs, numOfOrders)
@@ -505,8 +704,25 @@ func publishUpsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 	}
 }
 
+func publishUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
+	redPandaClient := getRedPandaClient("orders_upsert_avro")
+	defer redPandaClient.Close()
+
+	avros := generateUpsertOrderAVRO(numOfUserIDs, numOfOrders)
+
+	records := make([]*kgo.Record, 0)
+	for _, myAVRO := range avros {
+		records = append(records, &kgo.Record{Topic: "orders_upsert_avro", Value: myAVRO})
+	}
+
+	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
+	if err != nil {
+		log.Println(err)
+	}
+}
+
 func publishInsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient()
+	redPandaClient := getRedPandaClient("orders_avro")
 	defer redPandaClient.Close()
 
 	avros := generateInsertOrderAVRO(numOfUserIDs, numOfOrders)
@@ -514,6 +730,23 @@ func publishInsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
 	records := make([]*kgo.Record, 0)
 	for _, myAVRO := range avros {
 		records = append(records, &kgo.Record{Topic: "orders_avro", Value: myAVRO})
+	}
+
+	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func publishInsertTradeAVRO(numOfUserIDs int, numOfOrders int, numOfTrades int) {
+	redPandaClient := getRedPandaClient("trades_avro")
+	defer redPandaClient.Close()
+
+	avros := generateInsertTradeAVRO(numOfUserIDs, numOfOrders, numOfTrades)
+
+	records := make([]*kgo.Record, 0)
+	for _, myAVRO := range avros {
+		records = append(records, &kgo.Record{Topic: "trades_avro", Value: myAVRO})
 	}
 
 	err := redPandaClient.ProduceSync(context.Background(), records...).FirstErr()
