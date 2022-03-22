@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/hamba/avro"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -231,6 +232,38 @@ func main() {
 		}
 
 		c.JSON(200, []interface{}{jsonString})
+	})
+
+	// example:
+	// {"user_id":1,"stock_code":"BBCA","type":"B","lot":10,"price":1000,"status":1}
+	// json: 77 bytes
+	// avro: 12 bytes
+	r.GET("/json_vs_avro", func(c *gin.Context) {
+		myJSON, _ := json.Marshal(order{
+			UserID:    1,
+			StockCode: "BBCA",
+			Type:      "B",
+			Lot:       10,
+			Price:     1000,
+			Status:    1,
+		})
+
+		schema := avro.MustParse(`{"type":"record","name":"order","fields":[{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+		myAVRO, _ := avro.Marshal(schema,
+			orderAVRO{
+				UserID:    1,
+				StockCode: "BBCA",
+				Type:      "B",
+				Lot:       10,
+				Price:     1000,
+				Status:    1,
+			},
+		)
+
+		c.JSON(200, map[string]interface{}{
+			"json": len(myJSON),
+			"avro": len(myAVRO),
+		})
 	})
 
 	r.Run(":8090")
@@ -513,6 +546,7 @@ func generateInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int)
 }
 
 type orderAVRO struct {
+	ID        string `avro:"id"`
 	UserID    int64  `avro:"user_id"`
 	StockCode string `avro:"stock_code"`
 	Type      string `avro:"type"`
@@ -531,8 +565,16 @@ type orderAVROUpsert struct {
 	Status    int    `avro:"status"`
 }
 
+func generateUUID(userID int64) string {
+	nowNanoString := strconv.FormatInt(time.Now().UnixNano(), 10)
+	userIDString := strconv.FormatInt(userID, 10)
+	uuid := uuid.New().String()
+
+	return nowNanoString + "." + userIDString + "." + uuid
+}
+
 func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
-	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"id","type":"string"},{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -550,6 +592,7 @@ func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
 			orderAVRO, err := avro.Marshal(
 				schema,
 				orderAVRO{
+					ID:        generateUUID(int64(i)),
 					UserID:    int64(i),
 					StockCode: "BBCA",
 					Type:      orderType,
