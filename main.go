@@ -155,7 +155,7 @@ func main() {
 				break consumerLoop
 			}
 
-			schema := avro.MustParse(`{"type":"record","name":"order","fields":[{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+			schema := avro.MustParse(`{"type":"record","name":"order","fields":[{"name":"id","type":"string"},{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
 
 			for !iter.Done() {
 				record := iter.Next()
@@ -464,7 +464,7 @@ func generateUpsertOrderJSON(numOfUserIDs int, numOfOrders int) [][]byte {
 }
 
 func generateUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
-	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"id","type":"long"},{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
+	schema, err := avro.Parse(`{"type":"record","name":"order","fields":[{"name":"id","type":"string"},{"name":"user_id","type":"long"},{"name":"stock_code","type":"string"},{"name":"type","type":"string"},{"name":"lot","type":"long"},{"name":"price","type":"int"},{"name":"status","type":"int"}]}`)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func generateUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
 			orderAVRO, err := avro.Marshal(
 				schema,
 				orderAVROUpsert{
-					ID:        int64(j + offset),
+					ID:        strconv.Itoa(j + offset),
 					UserID:    int64(i),
 					StockCode: "BBCA",
 					Type:      orderType,
@@ -556,7 +556,7 @@ type orderAVRO struct {
 }
 
 type orderAVROUpsert struct {
-	ID        int64  `avro:"id"`
+	ID        string `avro:"id"`
 	UserID    int64  `avro:"user_id"`
 	StockCode string `avro:"stock_code"`
 	Type      string `avro:"type"`
@@ -589,10 +589,12 @@ func generateInsertOrderAVRO(numOfUserIDs int, numOfOrders int) [][]byte {
 				orderType = "S"
 			}
 
+			offset := numOfOrders * (i - 1)
+
 			orderAVRO, err := avro.Marshal(
 				schema,
 				orderAVRO{
-					ID:        generateUUID(int64(i)),
+					ID:        strconv.Itoa(j + offset),
 					UserID:    int64(i),
 					StockCode: "BBCA",
 					Type:      orderType,
@@ -663,7 +665,7 @@ func generateInsertTradeAVRO(numOfUserIDs int, numOfOrders int, numOfTrades int)
 
 func getRedPandaHosts() []string {
 	return []string{
-		"127.0.0.1:9093",
+		"0.0.0.0:9093",
 	}
 }
 
