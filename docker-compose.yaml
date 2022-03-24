@@ -1,5 +1,16 @@
-version: '3.3'
+version: '3.7'
 services:
+  web:
+    container_name: web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 8090:8090 # grpc
+    expose:
+      - "8090" # grpc
+    links:
+      - "redpanda:redpanda"
   kafdrop:
     image: obsidiandynamics/kafdrop
     container_name: kafdrop
@@ -11,6 +22,8 @@ services:
       JVM_OPTS: "-Xms16M -Xmx48M -Xss180K -XX:-TieredCompilation -XX:+UseStringDeduplication -noverify"
     depends_on:
       - "redpanda"
+    logging:
+      driver: none
   redpanda:
     # image: vectorized/redpanda:v21.6.1
     image: vectorized/redpanda:latest
@@ -33,7 +46,9 @@ services:
       - 9093:9093
       - 29092:29092
     volumes:
-      - /var/lib/redpanda/data
+      - /var/lib/redpanda/data:/var/lib/redpanda/data
+    logging:
+      driver: none
   singlestore:
     image: singlestore/cluster-in-a-box:centos-7.3.11-f7c82b8166-3.2.9-1.11.5
     container_name: s2-agg-0
@@ -50,3 +65,14 @@ services:
       - ROOT_PASSWORD=something
       - LICENSE_KEY=something
       - START_AFTER_INIT=Y
+    logging:
+      driver: none
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - /etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    logging:
+      driver: none

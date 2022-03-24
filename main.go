@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -14,13 +13,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/hamba/avro"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kprom"
 )
+
+var metrics = kprom.NewMetrics("kgo")
 
 // https://www.timescale.com/blog/13-tips-to-improve-postgresql-insert-performance/
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	ctx := context.Background()
+
+	redPandaClient := getRedPandaClient()
+	defer redPandaClient.Close()
 
 	r := gin.Default()
 
@@ -98,7 +103,7 @@ func main() {
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
-		publishInsertOrderJSON(numOfUserIDs, numOfOrders)
+		publishInsertOrderJSON(redPandaClient, numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
@@ -109,7 +114,7 @@ func main() {
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
-		publishUpsertOrderJSON(numOfUserIDs, numOfOrders)
+		publishUpsertOrderJSON(redPandaClient, numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
@@ -122,7 +127,7 @@ func main() {
 		numOfTradesString := c.DefaultQuery("numOfTrades", "1")
 		numOfTrades, _ := strconv.Atoi(numOfTradesString)
 
-		publishInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
+		publishInsertTradeJSON(redPandaClient, numOfUserIDs, numOfOrders, numOfTrades)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
@@ -133,15 +138,12 @@ func main() {
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
-		publishInsertOrderAVRO(numOfUserIDs, numOfOrders)
+		publishInsertOrderAVRO(redPandaClient, numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
 
 	r.GET("/consume/orders/avro", func(c *gin.Context) {
-		redPandaClient := getRedPandaClient("orders_avro")
-		defer redPandaClient.Close()
-
 		var jsonString string
 
 	consumerLoop:
@@ -150,7 +152,7 @@ func main() {
 			iter := fetches.RecordIter()
 
 			for _, fetchErr := range fetches.Errors() {
-				fmt.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
+				log.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
 					fetchErr.Topic, fetchErr.Partition, fetchErr.Err)
 				break consumerLoop
 			}
@@ -180,7 +182,7 @@ func main() {
 		numOfOrdersString := c.DefaultQuery("numOfOrders", "10")
 		numOfOrders, _ := strconv.Atoi(numOfOrdersString)
 
-		publishUpsertOrderAVRO(numOfUserIDs, numOfOrders)
+		publishUpsertOrderAVRO(redPandaClient, numOfUserIDs, numOfOrders)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
@@ -193,15 +195,12 @@ func main() {
 		numOfTradesString := c.DefaultQuery("numOfTrades", "1")
 		numOfTrades, _ := strconv.Atoi(numOfTradesString)
 
-		publishInsertTradeAVRO(numOfUserIDs, numOfOrders, numOfTrades)
+		publishInsertTradeAVRO(redPandaClient, numOfUserIDs, numOfOrders, numOfTrades)
 
 		c.JSON(200, []interface{}{"DONE"})
 	})
 
 	r.GET("/consume/trades/avro", func(c *gin.Context) {
-		redPandaClient := getRedPandaClient("trades_avro")
-		defer redPandaClient.Close()
-
 		var jsonString string
 
 	consumerLoop:
@@ -210,7 +209,7 @@ func main() {
 			iter := fetches.RecordIter()
 
 			for _, fetchErr := range fetches.Errors() {
-				fmt.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
+				log.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
 					fetchErr.Topic, fetchErr.Partition, fetchErr.Err)
 				break consumerLoop
 			}
@@ -265,6 +264,12 @@ func main() {
 			"avro": len(myAVRO),
 		})
 	})
+
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
+
+	// r.GET("/consumer/riskmanagement/start", func(c *gin.Context) {
+	// 	go RiskManagementConsumer()
+	// })
 
 	r.Run(":8090")
 }
@@ -665,15 +670,24 @@ func generateInsertTradeAVRO(numOfUserIDs int, numOfOrders int, numOfTrades int)
 
 func getRedPandaHosts() []string {
 	return []string{
-		"0.0.0.0:9093",
+		"redpanda:9092",
 	}
 }
 
-func getRedPandaClient(topicName string) *kgo.Client {
-	redPandaClient, err := kgo.NewClient(
+func getRedPandaClient() *kgo.Client {
+	opts := []kgo.Opt{
 		kgo.SeedBrokers(getRedPandaHosts()...),
-		kgo.ConsumeTopics(topicName),
-	)
+		kgo.WithHooks(metrics),
+		kgo.ConsumeTopics(
+			"orders",
+			"orders_upsert",
+			"trades",
+			"orders_avro",
+			"orders_upsert_avro",
+			"trades_avro",
+		),
+	}
+	redPandaClient, err := kgo.NewClient(opts...)
 	if err != nil {
 		log.Println(err)
 		panic(err)
@@ -682,10 +696,7 @@ func getRedPandaClient(topicName string) *kgo.Client {
 	return redPandaClient
 }
 
-func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient("orders")
-	defer redPandaClient.Close()
-
+func publishInsertOrderJSON(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int) {
 	jsons := generateInsertOrderJSON(numOfUserIDs, numOfOrders)
 
 	// var wg sync.WaitGroup
@@ -715,10 +726,7 @@ func publishInsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 	}
 }
 
-func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) {
-	redPandaClient := getRedPandaClient("trades")
-	defer redPandaClient.Close()
-
+func publishInsertTradeJSON(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int, numOfTrades int) {
 	jsons := generateInsertTradeJSON(numOfUserIDs, numOfOrders, numOfTrades)
 
 	records := make([]*kgo.Record, 0)
@@ -732,10 +740,7 @@ func publishInsertTradeJSON(numOfUserIDs int, numOfOrders int, numOfTrades int) 
 	}
 }
 
-func publishUpsertOrderJSON(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient("orders_upsert")
-	defer redPandaClient.Close()
-
+func publishUpsertOrderJSON(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int) {
 	jsons := generateUpsertOrderJSON(numOfUserIDs, numOfOrders)
 
 	records := make([]*kgo.Record, 0)
@@ -749,10 +754,7 @@ func publishUpsertOrderJSON(numOfUserIDs int, numOfOrders int) {
 	}
 }
 
-func publishUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient("orders_upsert_avro")
-	defer redPandaClient.Close()
-
+func publishUpsertOrderAVRO(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int) {
 	avros := generateUpsertOrderAVRO(numOfUserIDs, numOfOrders)
 
 	records := make([]*kgo.Record, 0)
@@ -766,10 +768,7 @@ func publishUpsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
 	}
 }
 
-func publishInsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
-	redPandaClient := getRedPandaClient("orders_avro")
-	defer redPandaClient.Close()
-
+func publishInsertOrderAVRO(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int) {
 	avros := generateInsertOrderAVRO(numOfUserIDs, numOfOrders)
 
 	records := make([]*kgo.Record, 0)
@@ -783,10 +782,7 @@ func publishInsertOrderAVRO(numOfUserIDs int, numOfOrders int) {
 	}
 }
 
-func publishInsertTradeAVRO(numOfUserIDs int, numOfOrders int, numOfTrades int) {
-	redPandaClient := getRedPandaClient("trades_avro")
-	defer redPandaClient.Close()
-
+func publishInsertTradeAVRO(redPandaClient *kgo.Client, numOfUserIDs int, numOfOrders int, numOfTrades int) {
 	avros := generateInsertTradeAVRO(numOfUserIDs, numOfOrders, numOfTrades)
 
 	records := make([]*kgo.Record, 0)
@@ -927,3 +923,61 @@ func poolInsertTrades(ctx context.Context, db *sql.DB, numOfUserIDs int, numOfOr
 // 	log.Println("Avg speed:", timeElapsed.Microseconds()/int64(totalTask), "microsecond")
 // 	log.Println("Record/s:", float64(totalTask)/timeElapsed.Seconds())
 // }
+
+type orderJSON struct {
+	ID        string `json:"id"`
+	UserID    int64  `json:"user_id"`
+	StockCode string `json:"stock_code"`
+	Type      string `json:"type"`
+	Lot       int64  `json:"lot"`
+	Price     int    `json:"price"`
+	Status    int    `json:"status"`
+}
+
+func RiskManagementConsumer() {
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(getRedPandaHosts()...),
+		// kgo.WithHooks(metrics),
+		kgo.ConsumeTopics(
+			"risk_management_validate",
+		),
+	}
+	redPandaClient, err := kgo.NewClient(opts...)
+	if err != nil {
+		log.Println(err)
+		panic(err)
+	}
+
+	var counter int = 0
+
+	now := time.Now()
+
+consumerLoop:
+	for {
+		fetches := redPandaClient.PollFetches(context.Background())
+		iter := fetches.RecordIter()
+
+		for _, fetchErr := range fetches.Errors() {
+			log.Printf("error consuming from topic: topic=%s, partition=%d, err=%v\n",
+				fetchErr.Topic, fetchErr.Partition, fetchErr.Err)
+			break consumerLoop
+		}
+
+		for !iter.Done() {
+			counter++
+			iter.Next()
+
+			if counter == 1000000 {
+				duration := time.Since(now)
+				log.Println("Speed:", duration.Milliseconds())
+			}
+			// record := iter.Next()
+
+			// result := orderJSON{}
+			// err := json.Unmarshal(record.Value, &result)
+			// if err != nil {
+			// 	log.Println(err)
+			// }
+		}
+	}
+}
